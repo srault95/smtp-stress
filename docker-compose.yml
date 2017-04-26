@@ -1,0 +1,182 @@
+version: '2'
+
+networks:
+  default:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+      - subnet: 172.16.239.0/24
+        gateway: 172.16.239.1
+
+services:
+
+    datashared:
+      image: tianon/true
+      volumes:
+        - /etc/localtime:/etc/localtime
+        - ./volumes/tmp:/tmpdir
+        - ./volumes/shared:/stress/shared
+        - ./volumes/mail:/var/lib/mail
+
+    syslog:
+      image: bobrik/syslog-ng
+      entrypoint: /usr/sbin/syslog-ng
+      command: -e -F -f /etc/syslog-ng/syslog-ng.conf
+      networks:
+        default:
+          ipv4_address: 172.16.239.100
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=internal"        
+      volumes:
+        - ./volumes/syslog:/var/log/syslog-ng
+        #TODO: - ./syslog-ng.conf:/etc/syslog-ng/syslog-ng.conf:ro
+
+    dns:
+      image: andyshinn/dnsmasq
+      cap_add:
+        - NET_ADMIN
+      dns:    
+        - 8.8.8.8
+      networks:
+        default:
+          ipv4_address: 172.16.239.200
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=internal"        
+      logging:
+        driver: "syslog"
+        options:
+          syslog-address: "udp://172.16.239.100:514"
+          tag: "dns"
+      depends_on:
+        - syslog
+
+    relay:
+      #container_name: stress-relay
+      image: srault95/docker-mailhog
+      env_file:
+        - ./docker_environ
+      expose:
+        - "1025"
+      ports:
+        - "8025:8025"
+      volumes_from:
+        - datashared
+      dns:    
+        - 172.16.239.200
+      networks:
+        default:
+          ipv4_address: 172.16.239.101
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=internal"        
+      depends_on:
+        - dns
+      environment: &myenv
+        - RELAY_HOST=172.16.239.101
+        - RELAY_PORT=1025
+        - MY_NETWORK=172.16.239.0/24
+
+    postfix:
+      #container_name: stress-postfix
+      build: 
+        context: servers/postfix
+      env_file:
+        - ./docker_environ
+      environment: *myenv
+      expose:
+        - "25"
+      volumes_from:
+        - datashared
+      dns:    
+        - 172.16.239.200
+      logging:
+        driver: "syslog"
+        options:
+          syslog-address: "udp://172.16.239.100:514"
+          tag: "postfix"
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=mta"        
+        - "org.srault95.server.name=postfix"        
+      depends_on:
+        - dns
+        - relay
+
+    slimta:
+      #container_name: stress-slimta
+      build: 
+        context: servers/slimta  
+      env_file:
+        - ./docker_environ
+      environment: *myenv
+      expose:
+        - "25"
+      volumes_from:
+        - datashared
+      dns:    
+        - 172.16.239.200
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=mta"        
+        - "org.srault95.server.name=slimta"        
+      depends_on:
+        - relay
+
+    securesmtpd:
+      build: 
+        context: servers/secure-smtpd  
+      env_file:
+        - ./docker_environ
+      environment: *myenv
+      expose:
+        - "25"
+      volumes_from:
+        - datashared
+      dns:    
+        - 172.16.239.200
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=mta"        
+        - "org.srault95.server.name=secure-smtpd"        
+      depends_on:
+        - relay
+
+    securesmtpdgevent:
+      build: 
+        context: servers/secure-smtpd  
+      env_file:
+        - ./docker_environ
+      environment:
+        - RELAY_HOST=172.16.239.101
+        - RELAY_PORT=1025
+        - MY_NETWORK=172.16.239.0/24
+        - GEVENT=true
+      expose:
+        - "25"
+      volumes_from:
+        - datashared
+      dns:    
+        - 172.16.239.200
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.server.type=mta"        
+        - "org.srault95.server.name=secure-smtpd-gevent"        
+      depends_on:
+        - relay
+
+    client:
+      container_name: fake-mail-client
+      image: srault95/fake-mail-client
+      volumes_from:
+        - datashared
+      dns:
+        - 172.16.239.200
+      labels:
+        - "org.srault95.type=stress"        
+        - "org.srault95.client.type=smtp"        
+      depends_on:
+        - dns
+

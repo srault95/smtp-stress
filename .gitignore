@@ -1,0 +1,15 @@
+*.py[co]
+*.log
+*.egg-info
+*.hg
+*.hgignore
+.tox
+.coverage
+htmlcov
+doc/_build
+dist
+build
+archives/
+internal/
+TODO*.rst
+volumes/
